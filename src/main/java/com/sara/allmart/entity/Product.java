@@ -46,6 +46,11 @@ public class Product extends BaseEntity{
     @JoinColumn(name = "category_id")
     private Category category;
 
+    @NotNull(message = "Seller is required")
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "seller_id", nullable = false)
+    private User seller;
+
     @Column(name = "is_deleted")
     private boolean deleted = false;
 

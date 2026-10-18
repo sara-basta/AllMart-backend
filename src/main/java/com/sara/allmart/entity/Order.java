@@ -6,7 +6,6 @@ import jakarta.validation.constraints.PositiveOrZero;
 import lombok.*;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,9 +27,6 @@ public class Order extends BaseEntity{
             generator = "order_id_seq"
     )
     private Long id;
-    @NotNull
-    @Enumerated(EnumType.STRING)
-    private OrderStatus status;
 
     @Embedded
     @AttributeOverrides({
@@ -44,9 +40,8 @@ public class Order extends BaseEntity{
     @JoinColumn(name = "user_id")
     private User user;
 
-    @NotNull
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<OrderItem> items = new ArrayList<>();
+    private List<VendorOrder> vendorOrders = new ArrayList<>();
     @NotNull
     @PositiveOrZero
     private BigDecimal totalAmount;

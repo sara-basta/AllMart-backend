@@ -17,6 +17,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -34,17 +35,19 @@ public class ProductController {
         this.productService = productService;
     }
 
-    @PreAuthorize("hasAuthority('ADMIN')")
+    @PreAuthorize("hasAuthority('ADMIN') or hasAuthority('SELLER')")
     @Operation(summary = "Create a new product",
-    description = "Adds a new product to the catalog. Requires a valid category ID.")
+    description = "Adds a new product to the catalog. Requires a valid category ID. Caller must be a SELLER or ADMIN.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "201", description = "Product created successfully"),
             @ApiResponse(responseCode = "400", description = "Invalid input (e.g., negative price)"),
+            @ApiResponse(responseCode = "403", description = "Access denied — caller is not a SELLER or ADMIN"),
             @ApiResponse(responseCode = "404", description = "Category not found")
     })
     @PostMapping
-    public ResponseEntity<ProductResponse> createProduct(@Valid @RequestBody ProductRequest request){
-        ProductResponse response = productService.createProduct(request);
+    public ResponseEntity<ProductResponse> createProduct(@Valid @RequestBody ProductRequest request,
+                                                         Authentication authentication){
+        ProductResponse response = productService.createProduct(request, authentication.getName());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

@@ -25,7 +25,9 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -37,7 +39,10 @@ public class OrderService {
     private final SavedAddressRepository savedAddressRepository;
     private final ApplicationEventPublisher eventPublisher;
 
-    OrderService(OrderRepository orderRepository, ProductRepository productRepository, UserRepository userRepository, OrderMapper orderMapper, SavedAddressRepository savedAddressRepository, ApplicationEventPublisher eventPublisher){
+    OrderService(OrderRepository orderRepository, ProductRepository productRepository,
+                 UserRepository userRepository, OrderMapper orderMapper,
+                 SavedAddressRepository savedAddressRepository,
+                 ApplicationEventPublisher eventPublisher) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.userRepository = userRepository;
@@ -47,46 +52,34 @@ public class OrderService {
     }
 
     @Transactional
-    public OrderResponse createOrder (String email, OrderRequest request){
+    public OrderResponse createOrder(String email, OrderRequest request) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found"));
         Product product = productRepository.findById(request.productId())
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
 
-        if(product.getStockQuantity()<1){
+        if (product.getStockQuantity() < 1) {
             log.warn("Order failed: Product ID {} is out of stock", request.productId());
             throw new RuntimeException("Not in stock!");
         }
 
-        product.setStockQuantity(product.getStockQuantity()-1);
+        product.setStockQuantity(product.getStockQuantity() - 1);
         productRepository.save(product);
 
-        OrderItem item = new OrderItem();
-        item.setPriceAtPurchase(product.getPrice());
-        item.setProduct(product);
-        item.setQuantity(1);
+        BigDecimal itemPrice = product.getPrice();
+        BigDecimal total = itemPrice;
 
         Order order = new Order();
-        order.setStatus(OrderStatus.PENDING);
-
-        BigDecimal quantity = BigDecimal.valueOf(item.getQuantity());
-        BigDecimal total = item.getPriceAtPurchase().multiply(quantity);
-
         order.setTotalAmount(total);
 
-        item.setOrder(order);
-
         Address shippingAddress;
-
         if (request.addressId() != null) {
             SavedAddress savedAddress = savedAddressRepository.findById(request.addressId())
                     .orElseThrow(() -> new RuntimeException("Address not found"));
-
             if (!savedAddress.getUser().getEmail().equals(email)) {
                 throw new RuntimeException("Access Denied: You cannot use an address that isn't yours!");
             }
             shippingAddress = new Address(savedAddress.getStreet(), savedAddress.getCity(), savedAddress.getZipCode());
-
         } else if (request.newAddress() != null) {
             SavedAddress savedAddress = new SavedAddress();
             savedAddress.setStreet(request.newAddress().street());
@@ -94,7 +87,6 @@ public class OrderService {
             savedAddress.setZipCode(request.newAddress().zipCode());
             savedAddress.setUser(user);
             savedAddressRepository.save(savedAddress);
-
             shippingAddress = new Address(request.newAddress().street(), request.newAddress().city(), request.newAddress().zipCode());
         } else {
             throw new RuntimeException("Checkout failed: You must provide either an existing address ID or a new address.");
@@ -103,10 +95,23 @@ public class OrderService {
         order.setShippingAddress(shippingAddress);
         order.setUser(user);
 
-        if (order.getItems() == null) {
-            order.setItems(new ArrayList<>());
-        }
-        order.getItems().add(item);
+        // Create a VendorOrder for the product's seller
+        VendorOrder vendorOrder = new VendorOrder();
+        vendorOrder.setOrder(order);
+        vendorOrder.setSeller(product.getSeller());
+        vendorOrder.setStatus(OrderStatus.PENDING);
+        vendorOrder.setVendorSubtotal(itemPrice);
+        vendorOrder.setPlatformFee(BigDecimal.ZERO);
+
+        OrderItem item = new OrderItem();
+        item.setPriceAtPurchase(itemPrice);
+        item.setProduct(product);
+        item.setQuantity(1);
+        item.setVendorOrder(vendorOrder);
+
+        vendorOrder.setItems(new ArrayList<>(List.of(item)));
+        order.setVendorOrders(new ArrayList<>(List.of(vendorOrder)));
+
         log.info("Order successfully created");
         return orderMapper.toResponse(orderRepository.save(order));
     }
@@ -125,29 +130,48 @@ public class OrderService {
     public OrderResponse getAdminOrderById(Long orderId) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found!"));
-
         return orderMapper.toResponse(order);
     }
 
     public List<OrderResponse> getOrderByUser(Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found!"));
-        
+
         List<Order> ordersByUser = orderRepository.findOrdersByUser(user);
-        
+
         return ordersByUser.stream()
                 .map(orderMapper::toResponse)
                 .toList();
     }
 
+    /**
+     * Updates the status of a specific VendorOrder (seller sub-order).
+     * Status tracking has moved from the parent Order to VendorOrder.
+     * This method now accepts the vendorOrderId instead of orderId.
+     * The parent Order is still referenced for the event so that email
+     * notifications (which only need order.getId() and order.getUser()) continue to work.
+     */
     @Transactional
-    public OrderResponse updateStatus(Long id, OrderStatus newStatus) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found !"));
-        if(order.getStatus().equals(OrderStatus.DELIVERED)){
-            throw new IllegalStateException("You cannot change a delivered order's status !");
+    public OrderResponse updateVendorOrderStatus(Long vendorOrderId, OrderStatus newStatus) {
+        // Find the VendorOrder by scanning all orders — a VendorOrderRepository
+        // will be the clean solution in the next phase; for now we delegate
+        // to the parent order fetch through the VendorOrder's order reference.
+        Order order = orderRepository.findAll().stream()
+                .filter(o -> o.getVendorOrders().stream()
+                        .anyMatch(vo -> vo.getId().equals(vendorOrderId)))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("VendorOrder not found!"));
+
+        VendorOrder vendorOrder = order.getVendorOrders().stream()
+                .filter(vo -> vo.getId().equals(vendorOrderId))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("VendorOrder not found!"));
+
+        if (vendorOrder.getStatus() == OrderStatus.DELIVERED) {
+            throw new IllegalStateException("You cannot change a delivered vendor order's status!");
         }
-        order.setStatus(newStatus);
+
+        vendorOrder.setStatus(newStatus);
         orderRepository.save(order);
 
         eventPublisher.publishEvent(new OrderStatusEvent(this, order, newStatus.name()));
@@ -155,47 +179,41 @@ public class OrderService {
     }
 
     @Transactional
-    public Long createOrderFromCart(String email, List<CartItem> items,Long addressId, AddressRequest newAddress) {
+    public Long createOrderFromCart(String email, List<CartItem> items, Long addressId, AddressRequest newAddress) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         Order order = new Order();
         order.setUser(user);
-        order.setStatus(OrderStatus.PENDING);
         order.setCreatedAt(LocalDateTime.now());
 
         Address shippingAddress;
-
         if (addressId != null) {
             SavedAddress savedAddress = savedAddressRepository.findById(addressId)
                     .orElseThrow(() -> new RuntimeException("Address not found"));
-
             if (!savedAddress.getUser().getEmail().equals(email)) {
                 throw new RuntimeException("Access Denied: You cannot use an address that isn't yours!");
             }
             shippingAddress = new Address(savedAddress.getStreet(), savedAddress.getCity(), savedAddress.getZipCode());
-
         } else if (newAddress != null) {
-            // create and save the new address to the user's profile automatically
             SavedAddress savedAddress = new SavedAddress();
             savedAddress.setStreet(newAddress.street());
             savedAddress.setCity(newAddress.city());
             savedAddress.setZipCode(newAddress.zipCode());
             savedAddress.setUser(user);
             savedAddressRepository.save(savedAddress);
-
             shippingAddress = new Address(newAddress.street(), newAddress.city(), newAddress.zipCode());
         } else {
             throw new RuntimeException("Checkout failed: You must provide either an existing address ID or a new address.");
         }
 
-
         order.setShippingAddress(shippingAddress);
 
-        List<OrderItem> orderItems = new ArrayList<>();
+        // Group cart items by seller — each seller gets their own VendorOrder
+        Map<Long, VendorOrder> vendorOrderMap = new LinkedHashMap<>();
         BigDecimal totalOrderAmount = BigDecimal.ZERO;
 
-        for(CartItem cartItem : items){
+        for (CartItem cartItem : items) {
             Product product = cartItem.getProduct();
             if (product.getStockQuantity() < cartItem.getQuantity()) {
                 throw new RuntimeException("Product " + product.getName() + " is out of stock!");
@@ -204,19 +222,33 @@ public class OrderService {
             product.setStockQuantity(product.getStockQuantity() - cartItem.getQuantity());
             productRepository.save(product);
 
+            User seller = product.getSeller();
+            VendorOrder vendorOrder = vendorOrderMap.computeIfAbsent(seller.getId(), key -> {
+                VendorOrder vo = new VendorOrder();
+                vo.setOrder(order);
+                vo.setSeller(seller);
+                vo.setStatus(OrderStatus.PENDING);
+                vo.setVendorSubtotal(BigDecimal.ZERO);
+                vo.setPlatformFee(BigDecimal.ZERO);
+                vo.setItems(new ArrayList<>());
+                return vo;
+            });
+
+            BigDecimal lineTotal = cartItem.getPrice().multiply(BigDecimal.valueOf(cartItem.getQuantity()));
+
             OrderItem orderItem = new OrderItem();
-            orderItem.setOrder(order);
+            orderItem.setVendorOrder(vendorOrder);
             orderItem.setProduct(product);
             orderItem.setQuantity(cartItem.getQuantity());
             orderItem.setPriceAtPurchase(cartItem.getPrice());
 
-            orderItems.add(orderItem);
+            vendorOrder.getItems().add(orderItem);
+            vendorOrder.setVendorSubtotal(vendorOrder.getVendorSubtotal().add(lineTotal));
 
-            BigDecimal lineTotal = cartItem.getPrice().multiply(BigDecimal.valueOf(cartItem.getQuantity()));
             totalOrderAmount = totalOrderAmount.add(lineTotal);
         }
 
-        order.setItems(orderItems);
+        order.setVendorOrders(new ArrayList<>(vendorOrderMap.values()));
         order.setTotalAmount(totalOrderAmount);
 
         Order savedOrder = orderRepository.save(order);
@@ -228,7 +260,6 @@ public class OrderService {
         Order order = new Order();
         order.setUser(null);
         order.setGuestEmail(request.email());
-        order.setStatus(OrderStatus.PENDING);
         order.setCreatedAt(LocalDateTime.now());
         order.setPaymentMethod(request.paymentMethod());
 
@@ -239,7 +270,8 @@ public class OrderService {
                 shippingAddress.getZipCode()
         ));
 
-        List<OrderItem> orderItems = new ArrayList<>();
+        // Group guest checkout items by seller
+        Map<Long, VendorOrder> vendorOrderMap = new LinkedHashMap<>();
         BigDecimal totalOrderAmount = BigDecimal.ZERO;
 
         for (CheckoutItemRequest checkoutItem : request.items()) {
@@ -253,24 +285,38 @@ public class OrderService {
             product.setStockQuantity(product.getStockQuantity() - checkoutItem.quantity());
             productRepository.save(product);
 
+            User seller = product.getSeller();
+            VendorOrder vendorOrder = vendorOrderMap.computeIfAbsent(seller.getId(), key -> {
+                VendorOrder vo = new VendorOrder();
+                vo.setOrder(order);
+                vo.setSeller(seller);
+                vo.setStatus(OrderStatus.PENDING);
+                vo.setVendorSubtotal(BigDecimal.ZERO);
+                vo.setPlatformFee(BigDecimal.ZERO);
+                vo.setItems(new ArrayList<>());
+                return vo;
+            });
+
+            BigDecimal lineTotal = product.getPrice().multiply(BigDecimal.valueOf(checkoutItem.quantity()));
+
             OrderItem orderItem = new OrderItem();
-            orderItem.setOrder(order);
+            orderItem.setVendorOrder(vendorOrder);
             orderItem.setProduct(product);
             orderItem.setQuantity(checkoutItem.quantity());
             orderItem.setPriceAtPurchase(product.getPrice());
 
-            orderItems.add(orderItem);
-
-            BigDecimal lineTotal = product.getPrice().multiply(BigDecimal.valueOf(checkoutItem.quantity()));
+            vendorOrder.getItems().add(orderItem);
+            vendorOrder.setVendorSubtotal(vendorOrder.getVendorSubtotal().add(lineTotal));
             totalOrderAmount = totalOrderAmount.add(lineTotal);
         }
 
-        order.setItems(orderItems);
+        order.setVendorOrders(new ArrayList<>(vendorOrderMap.values()));
         order.setTotalAmount(totalOrderAmount);
 
         if (request.paymentMethod() == PaymentMethod.CASH_ON_DELIVERY) {
             order.setPaid(false);
-            order.setStatus(OrderStatus.CONFIRMED);
+            // Mark all vendor sub-orders as CONFIRMED for CoD
+            order.getVendorOrders().forEach(vo -> vo.setStatus(OrderStatus.CONFIRMED));
         }
 
         Order savedOrder = orderRepository.save(order);
@@ -289,7 +335,6 @@ public class OrderService {
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         Page<Order> ordersPage = orderRepository.findByUser(user, pageable);
-
         return ordersPage.map(orderMapper::toResponse);
     }
 
@@ -304,23 +349,28 @@ public class OrderService {
             throw new RuntimeException("You are not allowed to cancel this order");
         }
 
-        if (order.getStatus() != OrderStatus.PENDING && order.getStatus() != OrderStatus.CONFIRMED) {
+        // An order can only be cancelled if all vendor sub-orders are still in early stages
+        boolean anyTooFar = order.getVendorOrders().stream()
+                .anyMatch(vo -> vo.getStatus() != OrderStatus.PENDING
+                        && vo.getStatus() != OrderStatus.CONFIRMED);
+        if (anyTooFar) {
             throw new IllegalStateException("Order has progressed too far and can no longer be cancelled by the user.");
         }
 
-        List<OrderItem> items = order.getItems();
+        // Restore stock for all items across all vendor sub-orders
+        for (VendorOrder vo : order.getVendorOrders()) {
+            for (OrderItem item : vo.getItems()) {
+                Integer quantity = item.getQuantity();
+                Long itemId = item.getProduct().getId();
 
-        for(OrderItem item : items){
-            Integer quantity = item.getQuantity();
-            Long itemId = item.getProduct().getId();
-
-            Product product = productRepository.findById(itemId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
-            product.setStockQuantity(product.getStockQuantity()+quantity);
+                Product product = productRepository.findById(itemId)
+                        .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+                product.setStockQuantity(product.getStockQuantity() + quantity);
+            }
+            vo.setStatus(OrderStatus.CANCELLED);
         }
-        order.setStatus(OrderStatus.CANCELLED);
-        orderRepository.save(order);
 
+        orderRepository.save(order);
         eventPublisher.publishEvent(new OrderStatusEvent(this, order, "CANCELLED"));
 
         return orderMapper.toResponse(order);

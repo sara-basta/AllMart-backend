@@ -5,14 +5,18 @@ import com.sara.allmart.dto.response.ProductResponse;
 import com.sara.allmart.entity.Category;
 import com.sara.allmart.entity.Product;
 import com.sara.allmart.entity.ProductImage;
+import com.sara.allmart.entity.Role;
+import com.sara.allmart.entity.User;
 import com.sara.allmart.exception.ResourceNotFoundException;
 import com.sara.allmart.mapper.ProductMapper;
 import com.sara.allmart.repository.CategoryRepository;
 import com.sara.allmart.repository.ProductRepository;
+import com.sara.allmart.repository.UserRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
@@ -26,16 +30,29 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final ProductMapper productMapper;
     private final CategoryRepository categoryRepository;
+    private final UserRepository userRepository;
 
-    public ProductService(ProductRepository productRepository, ProductMapper productMapper, CategoryRepository categoryRepository) {
+    public ProductService(ProductRepository productRepository, ProductMapper productMapper,
+                          CategoryRepository categoryRepository, UserRepository userRepository) {
         this.productRepository = productRepository;
         this.productMapper = productMapper;
         this.categoryRepository = categoryRepository;
+        this.userRepository = userRepository;
     }
 
     @CacheEvict(value = "products", allEntries = true)
-    public ProductResponse createProduct(ProductRequest request) {
+    public ProductResponse createProduct(ProductRequest request, String sellerEmail) {
+        // Resolve the authenticated user from the database
+        User seller = userRepository.findByEmail(sellerEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Authenticated user not found!"));
+
+        // Only SELLER or ADMIN roles are permitted to create products
+        if (seller.getRole() != Role.SELLER && seller.getRole() != Role.ADMIN) {
+            throw new AccessDeniedException("Only sellers and admins can create products.");
+        }
+
         Product product = productMapper.toEntity(request);
+        product.setSeller(seller);
         productRepository.save(product);
 
         return productMapper.toResponse(product);

@@ -30,11 +30,11 @@ public class OrderItem {
     @NotNull
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
-            name="order_id",
-            foreignKey = @ForeignKey(name = "fk_order_items_orders")
+            name = "vendor_order_id",
+            foreignKey = @ForeignKey(name = "fk_order_items_vendor_orders")
     )
     @JsonIgnore
-    private Order order;
+    private VendorOrder vendorOrder;
 
     @NotNull
     @ManyToOne(fetch = FetchType.LAZY)

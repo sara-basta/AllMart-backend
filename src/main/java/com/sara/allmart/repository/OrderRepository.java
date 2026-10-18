@@ -16,22 +16,38 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface OrderRepository extends JpaRepository<Order,Long> {
+public interface OrderRepository extends JpaRepository<Order, Long> {
+
     List<Order> findOrdersByUser(User user);
 
     Page<Order> findByUser(User user, Pageable pageable);
 
-    @Query("SELECT COUNT(i) FROM Order o JOIN o.items i " +
+    /**
+     * Counts how many times a product has been delivered to a user.
+     * Items now live under VendorOrder, so the join path is:
+     * Order → vendorOrders → items (OrderItem)
+     */
+    @Query("SELECT COUNT(i) FROM Order o " +
+            "JOIN o.vendorOrders vo " +
+            "JOIN vo.items i " +
             "WHERE o.user = :user " +
             "AND i.product.id = :productId " +
-            "AND o.status = :status")
-    long countDeliveredProductForUser(@Param("user") User user, @Param("productId") Long productId, @Param("status") OrderStatus status);
+            "AND vo.status = :status")
+    long countDeliveredProductForUser(@Param("user") User user,
+                                      @Param("productId") Long productId,
+                                      @Param("status") OrderStatus status);
 
     @Query("SELECT o FROM Order o LEFT JOIN FETCH o.user WHERE o.id = :orderId")
     Optional<Order> findByIdWithUser(@Param("orderId") Long orderId);
 
+    /**
+     * Marks an order as paid at the parent level.
+     * isPaid is still on Order; status has moved to VendorOrder.
+     * The Stripe webhook marks isPaid and separately transitions all
+     * VendorOrders to PAID via VendorOrderRepository (future step).
+     */
     @Modifying
     @Transactional
-    @Query("UPDATE Order o SET o.isPaid = true, o.status = :paidStatus WHERE o.id = :orderId AND o.isPaid = false")
-    int markPaidIfUnpaid(@Param("orderId") Long orderId, @Param("paidStatus") OrderStatus paidStatus);
+    @Query("UPDATE Order o SET o.isPaid = true WHERE o.id = :orderId AND o.isPaid = false")
+    int markPaidIfUnpaid(@Param("orderId") Long orderId);
 }

@@ -1,7 +1,6 @@
 package com.sara.allmart.service;
 
 import com.sara.allmart.entity.Order;
-import com.sara.allmart.entity.OrderStatus;
 import com.sara.allmart.event.OrderStatusEvent;
 import com.sara.allmart.repository.OrderRepository;
 import com.stripe.exception.SignatureVerificationException;
@@ -71,7 +70,7 @@ public class WebhookService {
         }
 
         Long orderId = Long.parseLong(orderIdStr);
-        int updatedRows = orderRepository.markPaidIfUnpaid(orderId, OrderStatus.PAID);
+        int updatedRows = orderRepository.markPaidIfUnpaid(orderId);
         if (updatedRows == 0) {
             log.info("Webhook duplicate/late event ignored: Order {} is already PAID.", orderId);
             return;

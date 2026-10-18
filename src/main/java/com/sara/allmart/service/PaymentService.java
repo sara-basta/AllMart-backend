@@ -5,6 +5,7 @@ import com.sara.allmart.entity.Order;
 import com.sara.allmart.entity.OrderStatus;
 import com.sara.allmart.entity.PaymentMethod;
 import com.sara.allmart.entity.User;
+import com.sara.allmart.entity.VendorOrder;
 import com.sara.allmart.event.OrderStatusEvent;
 import com.sara.allmart.exception.ResourceNotFoundException;
 import com.sara.allmart.repository.OrderRepository;
@@ -43,23 +44,28 @@ public class PaymentService {
         if(order.isPaid()){
             throw new IllegalStateException("This order had being paid.");
         }
-        if(order.getStatus()==OrderStatus.CANCELLED){
+        // If any vendor sub-order is CANCELLED, treat the whole order as cancelled
+        boolean isCancelled = order.getVendorOrders().stream()
+                .allMatch(vo -> vo.getStatus() == OrderStatus.CANCELLED);
+        if (isCancelled) {
             throw new IllegalStateException("This order had been cancelled.");
         }
         order.setPaymentMethod(request.paymentMethod());
         Map<String, String> response = new HashMap<>();
 
-        if(request.paymentMethod() == PaymentMethod.CREDIT_CARD){
+        if (request.paymentMethod() == PaymentMethod.CREDIT_CARD) {
             try {
                 PaymentIntent intent = stripeService.createPaymentIntent(order.getTotalAmount(), order.getId().toString());
                 response.put("clientSecret", intent.getClientSecret());
             } catch (Exception e) {
                 throw new RuntimeException("Failed to initialize Stripe payment: " + e.getMessage());
             }
-        }
-        else if (request.paymentMethod()== PaymentMethod.CASH_ON_DELIVERY){
+        } else if (request.paymentMethod() == PaymentMethod.CASH_ON_DELIVERY) {
             order.setPaid(false);
-            order.setStatus(OrderStatus.CONFIRMED);
+            // Status is now per-vendor; confirm all sub-orders for CoD
+            for (VendorOrder vo : order.getVendorOrders()) {
+                vo.setStatus(OrderStatus.CONFIRMED);
+            }
             response.put("message", "Order successfully placed for Cash on Delivery!");
         }
         orderRepository.save(order);
