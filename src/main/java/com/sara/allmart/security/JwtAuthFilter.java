@@ -14,6 +14,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
+/**
+ * JWT authentication filter that runs once per request.
+ *
+ * <p>Role enforcement (CUSTOMER, SELLER, ADMIN) works correctly for all roles
+ * without any filter changes. The authority is sourced from the live {@link com.sara.allmart.entity.User}
+ * entity returned by {@link CustomUserDetailsService#loadUserByUsername(String)}, which calls
+ * {@code User.getAuthorities()} → {@code SimpleGrantedAuthority(role.name())}.
+ * This means role changes in the database are reflected immediately on the next request,
+ * without needing to re-issue a JWT.
+ */
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
 
@@ -61,4 +71,4 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         filterChain.doFilter(request, response);
     }
-}
+}

@@ -49,6 +49,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/reviews/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/checkout/guest").permitAll()
                         .requestMatchers("/api/webhooks/**").permitAll()
+                        // Vendor dashboard routes — accessible to SELLERs and ADMINs
+                        .requestMatchers("/api/vendor/**").hasAnyAuthority("SELLER", "ADMIN")
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session -> session

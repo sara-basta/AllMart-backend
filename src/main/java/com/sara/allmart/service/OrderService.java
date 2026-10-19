@@ -13,6 +13,7 @@ import com.sara.allmart.repository.OrderRepository;
 import com.sara.allmart.repository.ProductRepository;
 import com.sara.allmart.repository.SavedAddressRepository;
 import com.sara.allmart.repository.UserRepository;
+import com.sara.allmart.repository.VendorOrderRepository;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -23,6 +24,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -32,23 +34,30 @@ import java.util.Map;
 @Service
 @Slf4j
 public class OrderService {
+
+    /** AllMart platform commission rate: 10% of vendorSubtotal */
+    private static final BigDecimal PLATFORM_FEE_RATE = new BigDecimal("0.10");
+
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final OrderMapper orderMapper;
     private final SavedAddressRepository savedAddressRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final VendorOrderRepository vendorOrderRepository;
 
     OrderService(OrderRepository orderRepository, ProductRepository productRepository,
                  UserRepository userRepository, OrderMapper orderMapper,
                  SavedAddressRepository savedAddressRepository,
-                 ApplicationEventPublisher eventPublisher) {
+                 ApplicationEventPublisher eventPublisher,
+                 VendorOrderRepository vendorOrderRepository) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.userRepository = userRepository;
         this.orderMapper = orderMapper;
         this.savedAddressRepository = savedAddressRepository;
         this.eventPublisher = eventPublisher;
+        this.vendorOrderRepository = vendorOrderRepository;
     }
 
     @Transactional
@@ -101,7 +110,9 @@ public class OrderService {
         vendorOrder.setSeller(product.getSeller());
         vendorOrder.setStatus(OrderStatus.PENDING);
         vendorOrder.setVendorSubtotal(itemPrice);
-        vendorOrder.setPlatformFee(BigDecimal.ZERO);
+        // Calculate the 10% platform commission
+        BigDecimal fee = itemPrice.multiply(PLATFORM_FEE_RATE).setScale(2, RoundingMode.HALF_UP);
+        vendorOrder.setPlatformFee(fee);
 
         OrderItem item = new OrderItem();
         item.setPriceAtPurchase(itemPrice);
@@ -144,27 +155,10 @@ public class OrderService {
                 .toList();
     }
 
-    /**
-     * Updates the status of a specific VendorOrder (seller sub-order).
-     * Status tracking has moved from the parent Order to VendorOrder.
-     * This method now accepts the vendorOrderId instead of orderId.
-     * The parent Order is still referenced for the event so that email
-     * notifications (which only need order.getId() and order.getUser()) continue to work.
-     */
     @Transactional
     public OrderResponse updateVendorOrderStatus(Long vendorOrderId, OrderStatus newStatus) {
-        // Find the VendorOrder by scanning all orders — a VendorOrderRepository
-        // will be the clean solution in the next phase; for now we delegate
-        // to the parent order fetch through the VendorOrder's order reference.
-        Order order = orderRepository.findAll().stream()
-                .filter(o -> o.getVendorOrders().stream()
-                        .anyMatch(vo -> vo.getId().equals(vendorOrderId)))
-                .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("VendorOrder not found!"));
-
-        VendorOrder vendorOrder = order.getVendorOrders().stream()
-                .filter(vo -> vo.getId().equals(vendorOrderId))
-                .findFirst()
+        // Direct lookup via VendorOrderRepository — replaces the previous full-table scan.
+        VendorOrder vendorOrder = vendorOrderRepository.findById(vendorOrderId)
                 .orElseThrow(() -> new ResourceNotFoundException("VendorOrder not found!"));
 
         if (vendorOrder.getStatus() == OrderStatus.DELIVERED) {
@@ -172,8 +166,9 @@ public class OrderService {
         }
 
         vendorOrder.setStatus(newStatus);
-        orderRepository.save(order);
+        vendorOrderRepository.save(vendorOrder);
 
+        Order order = vendorOrder.getOrder();
         eventPublisher.publishEvent(new OrderStatusEvent(this, order, newStatus.name()));
         return orderMapper.toResponse(order);
     }
@@ -229,7 +224,7 @@ public class OrderService {
                 vo.setSeller(seller);
                 vo.setStatus(OrderStatus.PENDING);
                 vo.setVendorSubtotal(BigDecimal.ZERO);
-                vo.setPlatformFee(BigDecimal.ZERO);
+                vo.setPlatformFee(BigDecimal.ZERO); // will be recalculated after subtotal is final
                 vo.setItems(new ArrayList<>());
                 return vo;
             });
@@ -247,6 +242,14 @@ public class OrderService {
 
             totalOrderAmount = totalOrderAmount.add(lineTotal);
         }
+
+        // Apply 10% platform commission on the final vendorSubtotal of each VendorOrder
+        vendorOrderMap.values().forEach(vo -> {
+            BigDecimal fee = vo.getVendorSubtotal()
+                    .multiply(PLATFORM_FEE_RATE)
+                    .setScale(2, RoundingMode.HALF_UP);
+            vo.setPlatformFee(fee);
+        });
 
         order.setVendorOrders(new ArrayList<>(vendorOrderMap.values()));
         order.setTotalAmount(totalOrderAmount);
@@ -292,7 +295,7 @@ public class OrderService {
                 vo.setSeller(seller);
                 vo.setStatus(OrderStatus.PENDING);
                 vo.setVendorSubtotal(BigDecimal.ZERO);
-                vo.setPlatformFee(BigDecimal.ZERO);
+                vo.setPlatformFee(BigDecimal.ZERO); // will be recalculated after subtotal is final
                 vo.setItems(new ArrayList<>());
                 return vo;
             });
@@ -309,6 +312,14 @@ public class OrderService {
             vendorOrder.setVendorSubtotal(vendorOrder.getVendorSubtotal().add(lineTotal));
             totalOrderAmount = totalOrderAmount.add(lineTotal);
         }
+
+        // Apply 10% platform commission on the final vendorSubtotal of each VendorOrder
+        vendorOrderMap.values().forEach(vo -> {
+            BigDecimal fee = vo.getVendorSubtotal()
+                    .multiply(PLATFORM_FEE_RATE)
+                    .setScale(2, RoundingMode.HALF_UP);
+            vo.setPlatformFee(fee);
+        });
 
         order.setVendorOrders(new ArrayList<>(vendorOrderMap.values()));
         order.setTotalAmount(totalOrderAmount);
