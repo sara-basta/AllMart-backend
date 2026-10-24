@@ -41,6 +41,9 @@ public class User extends BaseEntity implements UserDetails {
     @NotBlank(message = "Password is required")
     private String password;
 
+    @Column(name = "stripe_account_id")
+    private String stripeAccountId;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL,orphanRemoval = true)
     private List<SavedAddress> savedAddresses;
 

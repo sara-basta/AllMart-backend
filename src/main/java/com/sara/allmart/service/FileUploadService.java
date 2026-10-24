@@ -16,12 +16,15 @@ public class FileUploadService {
         this.cloudinary = cloudinary;
     }
 
-    public String uploadFile(MultipartFile file) throws IOException {
+    public String uploadFile(MultipartFile file, Long sellerId) throws IOException {
         if(file.isEmpty()){
             throw new IllegalArgumentException("File is empty.");
         }
 
-        Map uploadResult = cloudinary.uploader().upload(file.getBytes(), ObjectUtils.emptyMap() );
+        Map uploadResult = cloudinary.uploader().upload(
+                file.getBytes(),
+                ObjectUtils.asMap("folder", "v2_sellers/seller_" + sellerId)
+        );
 
         return uploadResult.get("secure_url").toString();
     }
