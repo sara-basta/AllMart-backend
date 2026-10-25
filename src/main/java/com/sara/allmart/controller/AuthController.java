@@ -7,7 +7,9 @@ import com.sara.allmart.entity.Role;
 import com.sara.allmart.entity.User;
 import com.sara.allmart.repository.UserRepository;
 import com.sara.allmart.security.JwtUtils;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -34,11 +36,17 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody RegisterRequest request) {
+        if (request.role() == Role.ADMIN) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot register as admin");
+        }
+
+        Role assignedRole = request.role() == Role.SELLER ? Role.SELLER : Role.CUSTOMER;
+
         User user = new User();
         user.setFirstName(request.firstName());
         user.setLastName(request.lastName());
         user.setEmail(request.email());
-        user.setRole(Role.CUSTOMER);
+        user.setRole(assignedRole);
         user.setPassword(passwordEncoder.encode(request.password()));
 
         userRepository.save(user);

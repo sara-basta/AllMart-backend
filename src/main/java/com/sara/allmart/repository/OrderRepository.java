@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -50,4 +51,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Transactional
     @Query("UPDATE Order o SET o.isPaid = true WHERE o.id = :orderId AND o.isPaid = false")
     int markPaidIfUnpaid(@Param("orderId") Long orderId);
+
+    @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.isPaid = true")
+    BigDecimal sumPaidOrderRevenue();
 }
