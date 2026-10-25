@@ -12,6 +12,8 @@ import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.checkout.SessionCreateParams;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -20,6 +22,7 @@ import java.math.RoundingMode;
 @Service
 public class StripeService {
     private static final BigDecimal PLATFORM_FEE_RATE = new BigDecimal("0.10");
+    private static final Logger log = LoggerFactory.getLogger(StripeService.class);
 
     @Value("${stripe.api.key}")
     private String stripeApiKey;
@@ -49,21 +52,43 @@ public class StripeService {
                 .setScale(0, RoundingMode.HALF_UP)
                 .longValueExact();
 
-        PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
+        PaymentIntentCreateParams.Builder paramsBuilder = PaymentIntentCreateParams.builder()
                 .setAmount(amountInCents)
                 .setCurrency("mad")
                 .putMetadata("orderId", orderId)
-                .setApplicationFeeAmount(platformFeeInCents)
-                .setTransferData(
-                        PaymentIntentCreateParams.TransferData.builder()
-                                .setDestination(sellerStripeAccountId)
-                                .build()
-                )
                 .setAutomaticPaymentMethods(
                         PaymentIntentCreateParams.AutomaticPaymentMethods.builder().setEnabled(true).build()
-                ).build();
+                );
 
-        return PaymentIntent.create(params);
+        if (isValidSellerStripeAccountId(sellerStripeAccountId)) {
+            paramsBuilder
+                    .setApplicationFeeAmount(platformFeeInCents)
+                    .setTransferData(
+                            PaymentIntentCreateParams.TransferData.builder()
+                                    .setDestination(sellerStripeAccountId)
+                                    .build()
+                    );
+        } else {
+            log.warn(
+                    "No valid Stripe Connect account configured for order {}; creating a platform charge",
+                    orderId
+            );
+        }
+
+        PaymentIntentCreateParams params = paramsBuilder.build();
+
+        try {
+            return PaymentIntent.create(params);
+        } catch (StripeException e) {
+            log.error(
+                    "Stripe payment intent failed for order {} using Connect account {}: {}",
+                    orderId,
+                    sellerStripeAccountId,
+                    e.getMessage(),
+                    e
+            );
+            throw e;
+        }
     }
 
     public String createCheckoutSession(BigDecimal amount, Long orderId, String guestEmail) throws StripeException {
@@ -124,13 +149,14 @@ public class StripeService {
         }
 
         User seller = order.getVendorOrders().get(0).getSeller();
-        if (seller == null || seller.getStripeAccountId() == null
-                || seller.getStripeAccountId().isBlank()) {
-            throw new IllegalStateException(
-                    "Seller does not have a configured Stripe account."
-            );
+        if (seller == null) {
+            return null;
         }
 
         return seller.getStripeAccountId();
+    }
+
+    private boolean isValidSellerStripeAccountId(String accountId) {
+        return accountId != null && accountId.matches("acct_[A-Za-z0-9]+");
     }
 }

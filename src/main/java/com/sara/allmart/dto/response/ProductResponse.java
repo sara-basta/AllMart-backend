@@ -12,6 +12,8 @@ public record ProductResponse(
         String categoryName,
         List<ProductImage> images,
         int reviewCount,
-        double averageRating
+        double averageRating,
+        Long sellerId,
+        String sellerName
 ){
 }

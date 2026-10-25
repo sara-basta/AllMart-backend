@@ -195,6 +195,17 @@ public class VendorOrderService {
      */
     public SellerStatsResponse getSellerStats(String email) {
         User seller = resolveSellerByEmail(email);
+        return getSellerStats(seller);
+    }
+
+    public SellerStatsResponse getSellerStats(Long userId) {
+        User seller = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Seller account not found for ID: " + userId));
+        return getSellerStats(seller);
+    }
+
+    private SellerStatsResponse getSellerStats(User seller) {
 
         BigDecimal grossRevenue = vendorOrderRepository.calculateTotalRevenueForSeller(seller);
         BigDecimal netRevenue   = vendorOrderRepository.calculateNetRevenueForSeller(seller);
@@ -205,7 +216,7 @@ public class VendorOrderService {
         long activeProductCount = productRepository.countBySellerAndDeletedFalse(seller);
 
         log.info("Stats fetched for seller {}: gross={}, net={}, products={}",
-                email, grossRevenue, netRevenue, activeProductCount);
+                seller.getEmail(), grossRevenue, netRevenue, activeProductCount);
 
         return new SellerStatsResponse(grossRevenue, totalPlatformFees, netRevenue, activeProductCount);
     }

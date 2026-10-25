@@ -29,9 +29,9 @@ public class WebhookController {
         } catch (SignatureVerificationException e) {
             log.error("Invalid Stripe signature: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid signature");
-        } catch (Exception e) {
-            log.error("Webhook processing failed: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Webhook error");
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid Stripe webhook payload: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid webhook payload");
         }
     }
 }

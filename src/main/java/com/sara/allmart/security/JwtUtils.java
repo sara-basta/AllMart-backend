@@ -3,6 +3,7 @@ package com.sara.allmart.security;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import com.sara.allmart.entity.User;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
@@ -20,11 +21,12 @@ public class JwtUtils {
     @Value("${allmart.app.jwtExpirationMs}")
     private int jwtExpirationMs;
 
-    public String generateToken(UserDetails userDetails) {
-        String role = userDetails.getAuthorities().iterator().next().getAuthority();
+    public String generateToken(User user) {
+        String role = user.getAuthorities().iterator().next().getAuthority();
         return Jwts.builder()
                 .claim("role", role)
-                .setSubject(userDetails.getUsername()) // Stores the Email inside the token
+                .claim("userId", user.getId())
+                .setSubject(user.getUsername()) // Stores the Email inside the token
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .signWith(key(), SignatureAlgorithm.HS256)

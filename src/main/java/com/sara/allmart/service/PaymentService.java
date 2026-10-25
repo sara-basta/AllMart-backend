@@ -11,6 +11,7 @@ import com.sara.allmart.exception.ResourceNotFoundException;
 import com.sara.allmart.repository.OrderRepository;
 import com.sara.allmart.repository.UserRepository;
 import com.stripe.model.PaymentIntent;
+import com.stripe.exception.StripeException;
 import jakarta.transaction.Transactional;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -33,7 +34,7 @@ public class PaymentService {
     }
 
     @Transactional
-    public Map<String, String> processPayment(String email, PaymentRequest request) {
+    public Map<String, String> processPayment(String email, PaymentRequest request) throws StripeException {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found!"));
         Order order = orderRepository.findById(request.orderId())
@@ -54,12 +55,8 @@ public class PaymentService {
         Map<String, String> response = new HashMap<>();
 
         if (request.paymentMethod() == PaymentMethod.CREDIT_CARD) {
-            try {
-                PaymentIntent intent = stripeService.createPaymentIntent(order.getTotalAmount(), order.getId().toString());
-                response.put("clientSecret", intent.getClientSecret());
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to initialize Stripe payment: " + e.getMessage());
-            }
+            PaymentIntent intent = stripeService.createPaymentIntent(order.getTotalAmount(), order.getId().toString());
+            response.put("clientSecret", intent.getClientSecret());
         } else if (request.paymentMethod() == PaymentMethod.CASH_ON_DELIVERY) {
             order.setPaid(false);
             // Status is now per-vendor; confirm all sub-orders for CoD

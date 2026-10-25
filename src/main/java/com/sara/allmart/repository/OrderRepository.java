@@ -44,7 +44,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
      * Marks an order as paid at the parent level.
      * isPaid is still on Order; status has moved to VendorOrder.
      * The Stripe webhook marks isPaid and separately transitions all
-     * VendorOrders to PAID via VendorOrderRepository (future step).
+     * eligible VendorOrders to PAID.
      */
     @Modifying
     @Transactional

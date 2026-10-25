@@ -60,6 +60,10 @@ public class ProductMapper {
         if(product.getCategory() != null) {
         categoryName = product.getCategory().getName();
         }
-        return new ProductResponse(id,name,description,price,stock,categoryName,imageResponses,reviewCount,averageRating);
+        Long sellerId = product.getSeller() != null ? product.getSeller().getId() : null;
+        String sellerName = product.getSeller() != null
+                ? product.getSeller().getFirstName() + " " + product.getSeller().getLastName()
+                : "Unknown Seller";
+        return new ProductResponse(id,name,description,price,stock,categoryName,imageResponses,reviewCount,averageRating,sellerId,sellerName);
     }
 }

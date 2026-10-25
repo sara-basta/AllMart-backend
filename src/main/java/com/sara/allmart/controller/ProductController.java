@@ -35,7 +35,7 @@ public class ProductController {
         this.productService = productService;
     }
 
-    @PreAuthorize("hasAuthority('ADMIN') or hasAuthority('SELLER')")
+    @PreAuthorize("hasAnyAuthority('SELLER', 'ADMIN')")
     @Operation(summary = "Create a new product",
     description = "Adds a new product to the catalog. Requires a valid category ID. Caller must be a SELLER or ADMIN.")
     @ApiResponses(value = {
@@ -79,7 +79,7 @@ public class ProductController {
         return ResponseEntity.ok(response);
     }
 
-    @PreAuthorize("hasAuthority('ADMIN')")
+    @PreAuthorize("hasAnyAuthority('SELLER', 'ADMIN')")
     @DeleteMapping("/{id}")
     public ResponseEntity<ProductResponse> deleteProduct(@PathVariable Long id){
         ProductResponse response = productService.deleteProduct(id);
@@ -99,7 +99,7 @@ public class ProductController {
         return ResponseEntity.ok(response);
     }
 
-    @PreAuthorize("hasAuthority('ADMIN')")
+    @PreAuthorize("hasAnyAuthority('SELLER', 'ADMIN')")
     @Operation(summary = "Update an existing product",
             description = "Updates all fields of the product (Name, Description, Price, Stock, Category).")
     @PutMapping("/{id}")

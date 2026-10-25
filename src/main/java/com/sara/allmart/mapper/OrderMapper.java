@@ -4,6 +4,7 @@ import com.sara.allmart.dto.response.OrderItemResponse;
 import com.sara.allmart.dto.response.OrderResponse;
 import com.sara.allmart.entity.Order;
 import com.sara.allmart.entity.OrderItem;
+import com.sara.allmart.entity.VendorOrder;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -16,6 +17,14 @@ public class OrderMapper {
 
     public OrderResponse toResponse(Order order) {
         Long id = order.getId();
+        String status = order.getVendorOrders() != null
+                ? order.getVendorOrders().stream()
+                        .map(VendorOrder::getStatus)
+                        .filter(java.util.Objects::nonNull)
+                        .map(Enum::name)
+                        .findFirst()
+                        .orElse(null)
+                : null;
         BigDecimal totalAmount = order.getTotalAmount();
         String shippingCity = order.getShippingAddress() != null
                 ? order.getShippingAddress().getCity()
@@ -32,7 +41,7 @@ public class OrderMapper {
                         .toList()
                 : Collections.emptyList();
 
-        return new OrderResponse(id, totalAmount, shippingCity, orderDate, items);
+        return new OrderResponse(id, status, totalAmount, shippingCity, orderDate, items);
     }
 
 

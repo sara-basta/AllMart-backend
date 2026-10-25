@@ -1,8 +1,11 @@
 package com.sara.allmart.service;
 
 import com.sara.allmart.entity.Order;
+import com.sara.allmart.entity.OrderStatus;
+import com.sara.allmart.entity.VendorOrder;
 import com.sara.allmart.event.OrderStatusEvent;
 import com.sara.allmart.repository.OrderRepository;
+import com.stripe.exception.EventDataObjectDeserializationException;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.model.Event;
 import com.stripe.model.PaymentIntent;
@@ -12,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import java.util.Map;
 
 @Slf4j
@@ -29,58 +33,76 @@ public class WebhookService {
         this.eventPublisher = eventPublisher;
     }
 
+    @Transactional
     public void processStripeEvent(String payload, String sigHeader) throws SignatureVerificationException {
         Event event = Webhook.constructEvent(payload, sigHeader, endpointSecret);
         log.info("Received Stripe Event: {} ({})", event.getType(), event.getId());
 
-        try {
-            if ("checkout.session.completed".equals(event.getType())) {
-                Object stripeObject = event.getDataObjectDeserializer().getObject()
-                        .orElse(event.getDataObjectDeserializer().deserializeUnsafe());
-                if (!(stripeObject instanceof Session)) {
-                    throw new RuntimeException("Stripe webhook object is not a checkout Session");
-                }
-
-                Session session = (Session) stripeObject;
-                String orderId = readOrderIdFromMetadata(session.getMetadata());
-                log.info("Processing Checkout Session for Order ID: {}", orderId);
-                updateOrderToPaid(orderId);
-            } else if ("payment_intent.succeeded".equals(event.getType())) {
-                Object stripeObject = event.getDataObjectDeserializer().getObject()
-                        .orElse(event.getDataObjectDeserializer().deserializeUnsafe());
-                if (!(stripeObject instanceof PaymentIntent)) {
-                    throw new RuntimeException("Stripe webhook object is not a PaymentIntent");
-                }
-
-                PaymentIntent intent = (PaymentIntent) stripeObject;
-                String orderId = readOrderIdFromMetadata(intent.getMetadata());
-                log.info("Processing Payment Intent for Order ID: {}", orderId);
-                updateOrderToPaid(orderId);
+        if ("checkout.session.completed".equals(event.getType())) {
+            Object stripeObject = getStripeObject(event);
+            if (!(stripeObject instanceof Session session)) {
+                throw new IllegalArgumentException("Stripe webhook object is not a checkout Session");
             }
-        } catch (Exception e) {
-            log.error("CRITICAL ERROR in Webhook Processing: ", e);
-            throw new RuntimeException(e);
+
+            updateOrderToPaid(readOrderIdFromMetadata(session.getMetadata()));
+        } else if ("payment_intent.succeeded".equals(event.getType())) {
+            Object stripeObject = getStripeObject(event);
+            if (!(stripeObject instanceof PaymentIntent intent)) {
+                throw new IllegalArgumentException("Stripe webhook object is not a PaymentIntent");
+            }
+
+            updateOrderToPaid(readOrderIdFromMetadata(intent.getMetadata()));
+        } else {
+            log.info("Ignoring unhandled Stripe event type: {}", event.getType());
         }
     }
 
+    private Object getStripeObject(Event event) {
+        Object stripeObject = event.getDataObjectDeserializer().getObject().orElse(null);
+        if (stripeObject == null) {
+            try {
+                stripeObject = event.getDataObjectDeserializer().deserializeUnsafe();
+            } catch (EventDataObjectDeserializationException e) {
+                throw new IllegalArgumentException("Failed to deserialize Stripe webhook object", e);
+            }
+        }
+        return stripeObject;
+    }
+
+    @Transactional
     public void updateOrderToPaid(String orderIdStr) {
         if (orderIdStr == null || orderIdStr.isBlank()) {
-            log.warn("STILL PENDING: orderId was missing from Stripe metadata.");
+            log.warn("Ignoring Stripe event because orderId is missing from metadata.");
             return;
         }
 
-        Long orderId = Long.parseLong(orderIdStr);
-        int updatedRows = orderRepository.markPaidIfUnpaid(orderId);
-        if (updatedRows == 0) {
-            log.info("Webhook duplicate/late event ignored: Order {} is already PAID.", orderId);
+        final Long orderId;
+        try {
+            orderId = Long.valueOf(orderIdStr);
+        } catch (NumberFormatException exception) {
+            log.warn("Ignoring Stripe event with invalid orderId metadata: {}", orderIdStr);
             return;
         }
 
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found after paid update: " + orderId));
+                .orElseThrow(() -> new IllegalArgumentException("Order not found for Stripe payment: " + orderId));
 
-        eventPublisher.publishEvent(new OrderStatusEvent(this, order, "PAID"));
-        log.info("DATABASE UPDATED: Order {} is now PAID and event published once.", orderId);
+        boolean newlyPaid = !order.isPaid();
+        order.setPaid(true);
+        for (VendorOrder vendorOrder : order.getVendorOrders()) {
+            if (vendorOrder.getStatus() == OrderStatus.PENDING
+                    || vendorOrder.getStatus() == OrderStatus.CONFIRMED) {
+                vendorOrder.setStatus(OrderStatus.PAID);
+            }
+        }
+        orderRepository.save(order);
+
+        if (newlyPaid) {
+            eventPublisher.publishEvent(new OrderStatusEvent(this, order, OrderStatus.PAID.name()));
+        } else {
+            log.info("Webhook duplicate/late event reconciled vendor statuses for order {}.", orderId);
+        }
+        log.info("Order {} marked paid and vendor orders transitioned for fulfillment.", orderId);
     }
 
     private String readOrderIdFromMetadata(Map<String, String> metadata) {

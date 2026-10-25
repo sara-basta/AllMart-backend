@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 /**
  * REST controller for the Seller Dashboard API.
  *
- * <p>All endpoints are restricted to the {@code SELLER} role via the class-level
+ * <p>All endpoints are restricted to the {@code SELLER} or {@code ADMIN} role via the class-level
  * {@code @PreAuthorize} annotation. Data isolation is additionally enforced inside
  * {@link VendorOrderService} — every query is scoped to the authenticated seller's
  * {@link com.sara.allmart.entity.User} entity, so a SELLER can never see or modify
@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping("/api/vendor/orders")
-@PreAuthorize("hasAuthority('SELLER')")
+@PreAuthorize("hasAnyAuthority('SELLER', 'ADMIN')")
 public class VendorController {
 
     private final VendorOrderService vendorOrderService;
@@ -144,9 +144,12 @@ public class VendorController {
      */
     @GetMapping("/stats")
     public ResponseEntity<SellerStatsResponse> getSellerStats(
-            @AuthenticationPrincipal UserDetails user) {
+            @AuthenticationPrincipal UserDetails user,
+            @RequestParam(required = false) Long userId) {
 
-        SellerStatsResponse stats = vendorOrderService.getSellerStats(user.getUsername());
+        SellerStatsResponse stats = userId == null
+                ? vendorOrderService.getSellerStats(user.getUsername())
+                : vendorOrderService.getSellerStats(userId);
         return ResponseEntity.ok(stats);
     }
 }
